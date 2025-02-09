@@ -2,6 +2,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio as rio
+import rasterio.features as rfeatures
 import shapely.geometry as sg
 from shapely.geometry import Point
 
@@ -16,8 +17,8 @@ def generate_random_points_within_polygon(poly, num_points=50):
     Returns:
         gpd.GeoPandas: A geopandas represents random points.
     """
-    crs = poly.crs 
-    if crs  is None:
+    crs = poly.crs
+    if crs is None:
         crs = "epsg: 4326"
     min_x, min_y, max_x, max_y = poly.union_all().bounds
     bbox = poly.union_all()
@@ -83,5 +84,105 @@ def extract_raster_values_from_points(points, tif_path_file):
         df.columns = [f"band_{i + 1}" for i in range(df.shape[1])]
         df["geometry"] = point_list
         return df
-    except Exception as e:
-        raise ValueError(f"Error extracting raster values: {e}")
+    except ValueError as e:
+        print(f"Error extracting raster values: {e}")
+
+
+def raster_to_vector(tif_path, output_path=None, output_format="ESRI Shapefile"):
+    """
+    Converts a discrete raster file into a vector representation (polygons).
+
+    Parameters:
+    -----------
+    tif_path : str
+        Path to the input raster file (.tif).
+    output_path : str, optional
+        Path to save the output vector file (e.g., 'output.shp' or 'output.geojson').
+    output_format : str, optional, default="ESRI Shapefile"
+        Format to save the vector file. Supported formats include:
+        - "ESRI Shapefile" (.shp)
+        - "GeoJSON" (.geojson)
+        - "GPKG" (.gpkg)
+
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        A GeoDataFrame containing vectorized polygons with raster values as attributes.
+
+    Example:
+    --------
+    >>> gdf = raster_to_vector("input.tif", "output.shp")
+    >>> print(gdf.head())
+    """
+
+    try:
+        with rio.open(tif_path) as src:
+            img = src.read(1)  # Read the first raster band
+            transform = src.transform
+            mask = img != src.nodata  # Mask NoData values
+
+            # Extract shapes (polygons) from raster
+            polygons = [
+                {"geometry": sg.shape(geom), "properties": {"value": value}}
+                for geom, value in rfeatures.shapes(img, mask=mask, transform=transform)
+            ]
+            # Create a GeoDataFrame
+            gdf = gpd.GeoDataFrame(polygons, crs=src.crs)
+            gdf["properties"] = [i["value"] for i in gdf["properties"]]
+            gdf = gdf.dropna()
+            # Save the output file if output_path is provided
+            if output_path:
+                gdf.to_file(output_path, driver=output_format)
+
+        return gdf
+
+    except FileNotFoundError as e:
+        print(f"Error processing raster file: {e}")
+        return None
+
+
+def generate_tiles_cover_aoi(poly, tile_size=10):
+    """
+    Generates a grid of square tiles that fully cover the given area of interest (AOI),
+    keeping only tiles that intersect with the provided polygon.
+
+    Parameters:
+    -----------
+    poly : geopandas.GeoDataFrame
+        A GeoDataFrame containing the polygon(s) that define the area of interest (AOI).
+    tile_size : float, optional
+        The size of each tile in the same unit as the input polygon (default is 10).
+
+    Returns:
+    --------
+    geopandas.GeoDataFrame
+        A GeoDataFrame containing the generated tiles (as polygons) that intersect with the AOI.
+
+    Example:
+    --------
+    >>> import geopandas as gpd
+    >>> from shapely.geometry import Polygon
+    >>> poly = gpd.GeoDataFrame(geometry=[Polygon([(0,0), (10,0), (10,10), (0,10)])], crs="EPSG:4326")
+    >>> tiles = generate_tiles_cover_aoi(poly, tile_size=5)
+    >>> print(tiles)
+    """
+    xmin, ymin, xmax, ymax = poly.total_bounds
+    tiles = []
+
+    # Generate grid tiles over the bounding box
+    x = xmin
+    while x < xmax:
+        y = ymin
+        while y < ymax:
+            tile = sg.box(x, y, x + tile_size, y + tile_size)
+
+            # Check if the tile intersects the study area
+            if poly.intersects(tile).any():
+                tiles.append(tile)
+
+            y += tile_size
+        x += tile_size
+    # Convert to a GeoDataFrame
+    result = gpd.GeoDataFrame(geometry=tiles, crs=poly.crs)
+    result["codes"] = [f"A{i+1}" for i in range(len(result))]
+    return result
