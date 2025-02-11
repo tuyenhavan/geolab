@@ -184,5 +184,7 @@ def generate_tiles_cover_aoi(poly, tile_size=10):
         x += tile_size
     # Convert to a GeoDataFrame
     result = gpd.GeoDataFrame(geometry=tiles, crs=poly.crs)
-    result["codes"] = [f"A{i+1}" for i in range(len(result))]
+    result["codes"] = [
+        f"A0{i}" if i <= 9 else f"A{i}" for i in range(1, len(result) + 1)
+    ]
     return result

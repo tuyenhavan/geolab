@@ -1,5 +1,8 @@
 import geopandas as gpd
+import numpy as np
 import rasterio as rio
+import rioxarray as rxr
+import xarray as xr
 from rasterio.enums import Resampling
 from rasterio.mask import mask as mmask
 from rasterio.merge import merge
@@ -166,3 +169,87 @@ def clip_raster_by_polygon(poly, raster_file_path, outfile=None):
         return None  # Indicates successful save
 
     return out_meta, out_img
+
+
+def downscale_raster(file_path, decimation=10, mask_value=None, resampling=None):
+    """
+    Reads a raster file, downscales it by a given factor, and converts it into an xarray DataArray
+    while preserving spatial metadata.
+
+    This function reduces the resolution of the raster by the specified decimation factor,
+    applies optional masking, and returns the result as an `xarray.DataArray`. The downscaled
+    raster retains geospatial metadata, including coordinate reference system (CRS) and transformation.
+
+    Parameters:
+    -----------
+    file_path : str
+        Path to the input raster file (GeoTIFF or other raster format supported by Rasterio).
+    decimation : int, optional (default=10)
+        Factor by which to reduce the resolution. A value of 10 means reducing both width and
+        height by a factor of 10 (i.e., only every 10th pixel is kept).
+    mask_value : int or float, optional (default=None)
+        If specified, replaces all occurrences of this value in the raster with NaN.
+        Useful for handling missing data or no-data values.
+    resampling : rasterio.enums.Resampling, optional (default=rasterio.enums.Resampling.average)
+        The resampling method used during downscaling. Common options include:
+        - `Resampling.nearest` (fastest, preserves original values)
+        - `Resampling.bilinear` (linear interpolation)
+        - `Resampling.cubic` (smoother interpolation)
+        - `Resampling.average` (default, computes the average of the downsampled area)
+
+    Returns:
+    --------
+    xarray.DataArray
+        An `xarray.DataArray` containing the downsampled raster with:
+        - Dimensions: (`y`, `x`)
+        - Coordinates: (`y`: latitude/vertical axis, `x`: longitude/horizontal axis)
+        - Spatial metadata: CRS and transform stored using `rioxarray`.
+
+    Example Usage:
+    --------------
+    >>> downsampled_raster = downscale_raster("example.tif", decimation=5, mask_value=0, resampling=rio.enums.Resampling.nearest)
+    >>> print(downsampled_raster)
+
+    Notes:
+    ------
+    - The function uses Rasterio's `read(out_shape=...)` to efficiently resample the raster during reading.
+    - The default resampling method (`average`) is ideal for continuous data like elevation, but for categorical data (e.g., land cover), use `nearest`.
+    - The resulting `DataArray` can be used for further geospatial analysis, visualization, or export.
+    """
+
+    # Set default resampling method if none is provided
+    if resampling is None:
+        resampling = Resampling.average
+
+    # Open the raster file
+    with rio.open(file_path) as src:
+        # Compute new downsampled shape
+        out_shape = (int(src.height / decimation), int(src.width / decimation))
+
+        # Read and downscale the raster
+        data = src.read(out_shape=out_shape, resampling=resampling).squeeze()
+
+        # Generate new coordinate grid
+        x_coords = np.linspace(src.bounds.left, src.bounds.right, out_shape[1])
+        y_coords = np.linspace(src.bounds.top, src.bounds.bottom, out_shape[0])
+
+        # Preserve CRS and transformation information
+        crs = src.crs
+        transform = rio.transform.from_bounds(
+            *src.bounds, width=out_shape[1], height=out_shape[0]
+        )
+
+    # Apply masking (replace mask_value with NaN)
+    if mask_value is not None:
+        data = np.where(data == mask_value, np.nan, data)
+
+    # Convert to xarray DataArray
+    raster_array = xr.DataArray(
+        data=data, dims=["y", "x"], coords={"y": y_coords, "x": x_coords}
+    )
+
+    # Attach spatial metadata
+    raster_array = raster_array.rio.write_crs(crs)
+    raster_array = raster_array.rio.write_transform(transform)
+
+    return raster_array
