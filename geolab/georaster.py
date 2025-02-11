@@ -235,6 +235,8 @@ def downscale_raster(file_path, decimation=10, mask_value=None, resampling=None)
 
         # Preserve CRS and transformation information
         crs = src.crs
+        if crs is None:
+            crs = "epsg:4326"
         transform = rio.transform.from_bounds(
             *src.bounds, width=out_shape[1], height=out_shape[0]
         )

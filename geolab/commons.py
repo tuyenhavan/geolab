@@ -130,9 +130,7 @@ def monthly_date_list(start_year, start_month, start_day, number_of_month=12):
         lsit: A list of monthly dates.
     """
     first_date = datetime(start_year, start_month, start_day)
-    month_list = [
-        first_date + relativedelta(month=i) for i in range(1, number_of_month + 1)
-    ]
+    month_list = [first_date + relativedelta(months=i) for i in range(number_of_month)]
     return month_list
 
 
