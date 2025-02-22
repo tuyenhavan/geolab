@@ -151,7 +151,7 @@ def generate_tiles_cover_aoi(poly, tile_size=10):
     poly : geopandas.GeoDataFrame
         A GeoDataFrame containing the polygon(s) that define the area of interest (AOI).
     tile_size : float, optional
-        The size of each tile in the same unit as the input polygon (default is 10).
+        The size of each tile in the same unit as the input polygon (metter or degrees) (default is 10).
 
     Returns:
     --------

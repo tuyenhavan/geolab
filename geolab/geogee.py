@@ -485,3 +485,80 @@ def export_to_asset(
         scale=res,
     )
     task.start()
+
+def mask_landsat_clouds(collection):
+    """
+    Applies a cloud and cloud shadow mask to a Landsat ImageCollection using the QA_PIXEL band.
+    
+    The function removes pixels flagged as clouds or cloud shadows based on the QA_PIXEL band
+    in Landsat imagery. This function mainly works with Landsat 8 and 9 level 2 collection 2 tier 1 data.
+
+    Parameters:
+        collection (ee.ImageCollection): The input Landsat ImageCollection.
+
+    Returns:
+        ee.ImageCollection: The masked ImageCollection with clouds and cloud shadows removed.
+
+    Example:
+        # Load a Landsat 8 ImageCollection
+        landsat_collection = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2") \
+                                .filterBounds(ee.Geometry.Point([106.85, 10.76])) \
+                                .filterDate("2023-01-01", "2023-12-31")
+
+        # Apply the cloud masking function
+        masked_collection = mask_landsat_clouds(landsat_collection)
+    """
+    def mask_clouds(image):
+        """Masks clouds and cloud shadows in a Landsat image using the QA_PIXEL band."""
+        cloud_shadow_bit = 1 << 3  # Bit 3: Cloud shadow
+        cloud_bit = 1 << 5         # Bit 5: Cloud
+
+        qa = image.select("QA_PIXEL")
+        mask = qa.bitwiseAnd(cloud_shadow_bit).eq(0).And(
+            qa.bitwiseAnd(cloud_bit).eq(0)
+        )
+        return image.updateMask(mask)
+    return collection.map(mask_clouds)
+
+def convert_landsat_lst_to_celsius(collection, roi=None, band="ST_10"):
+    """
+    Converts Landsat surface temperature (LST) from Kelvin to Celsius in an ImageCollection.
+
+    The function applies a cloud mask using `mask_landsat_clouds`, optionally filters by 
+    a region of interest (ROI), and converts the specified thermal band from Kelvin to Celsius.
+
+    Parameters:
+        collection (ee.ImageCollection): The input Landsat ImageCollection containing LST data.
+        roi (ee.Geometry, optional): A region of interest to filter the collection. Defaults to None.
+        band (str, optional): The thermal band name to process. Defaults to "ST_10" (Landsat 8/9).
+
+    Returns:
+        ee.ImageCollection: The processed ImageCollection with the LST band converted to Celsius.
+
+    Example:
+        # Define a region of interest (ROI)
+        roi = ee.Geometry.Point([106.85, 10.76])
+
+        # Load a Landsat 8 Collection
+        landsat_collection = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2") \
+                                .filterDate("2023-01-01", "2023-12-31")
+
+        # Convert LST to Celsius
+        lst_celsius_collection = convert_landsat_lst_to_celsius(landsat_collection, roi)
+
+        # Display the first image
+        Map.addLayer(lst_celsius_collection.first(), {"min": 20, "max": 50, "palette": ["blue", "green", "red"]}, "LST in Celsius")
+    """
+    if roi:
+        collection = collection.filterBounds(roi)
+
+    # Apply cloud masking
+    collection = mask_landsat_clouds(collection)
+
+    def to_celsius(image):
+        """Converts the specified thermal band from Kelvin to Celsius."""
+        lst_celsius = image.select(band).multiply(0.00341802).subtract(273.15) \
+                           .rename("LST_Celsius")  # Rename for clarity
+        return image.addBands(lst_celsius).copyProperties(image, ["system:time_start"])
+
+    return collection.map(to_celsius)

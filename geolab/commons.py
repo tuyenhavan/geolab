@@ -6,12 +6,14 @@ import ee
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio as rio
 import xarray as xr
 from colour import Color
 from dateutil.relativedelta import relativedelta
 from matplotlib.colors import LinearSegmentedColormap
 
 
+# Common functions for handling files and data processing
 def list_files(path, ext=".tif"):
     """
     Lists all the .tif files in a given directory.
@@ -45,29 +47,6 @@ def numpy_to_xarray(numpy_array, source):
         ds = xr.DataArray(numpy_array, dims=source.dims, coords=source.coords)
         return ds
 
-
-def calculate_unique_percent(ds):
-    """Compute the percentage of uniques in a DataArray
-    args:
-    ds (DataArray): A DataArray or numpy array (2-d)
-
-    return: A dictionary
-    """
-    if isinstance(ds, np.ndarray):
-        data = ds.flatten()
-        data = data[~np.isnan(data)]
-    else:
-        data = ds.values.flatten()
-        data = data[~np.isnan(data)]
-    # Using count the count the unique values
-    count = Counter(data)
-    percent = {
-        str(key): round(val / sum(count.values()) * 100, 2)
-        for key, val in count.items()
-    }
-    return percent
-
-
 def cmap_generator(clist):
     """Generate a custom cmap.
 
@@ -91,7 +70,136 @@ def cmap_generator(clist):
     plt.show()
     return cmap
 
+def band_to_time_dim(col, date_list):
+    """Rename time series dimension.
 
+    Args:
+        col (DataArray): A dataarray without datetime dimension.
+        date_list (list): A list of dates corresponds to its dataarray length.
+
+    Returns:
+        DataArray: A DataArray with time dimension.
+    """
+    col = col.rename({"band": "time"})
+    if len(col) == len(date_list):
+        col["time"] = date_list
+    return col
+
+def arange(start, stop, step=1):
+    result = []
+    current = start
+    while current < stop:
+        result.append(current)
+        current += step
+    return result
+
+
+def get_utm_zone_from_longlat(longitude, latitude):
+    """
+    Determines the UTM zone number and hemisphere (N/S) for a given latitude and longitude.
+
+    Parameters:
+    -----------
+    longitude (x): float
+        Longitude coordinate in decimal degrees.
+    latitude (y): float
+        Latitude coordinate in decimal degrees.
+
+    Returns:
+    --------
+    str
+        UTM zone with hemisphere (e.g., "34N", "35N").
+
+    Example:
+    --------
+    >>> get_utm_zone(31.2357, 30.0444)  # Cairo, Egypt
+    '36N'
+    """
+    if not -180 <= longitude <= 180:
+        raise ValueError("Longitude must be within the range [-180, 180].")
+    if not -90 <= latitude <= 90:
+        raise ValueError("Latitude must be within the range [-90, 90].")
+    # Calculate UTM zone number
+    utm_zone = int((longitude + 180) / 6) + 1
+
+    # Determine hemisphere
+    hemisphere = "N" if latitude >= 0 else "S"
+    zone_code = f"{utm_zone}{hemisphere}"
+    zone = zone_code[:-1]
+    epsg_code = f"EPSG:326{zone}" if hemisphere == 'N' else f"EPSG:327{zone}"
+    return {"zone": zone_code, "epsg": epsg_code}
+
+
+def calculate_zero_percent(infile):
+    """
+    Calculate the percentage of zeros in a 2D NumPy array or a GeoTIFF file.
+
+    This function accepts either a path to a GeoTIFF (.tif) file or a NumPy array.
+    It calculates the percentage of elements equal to zero in the provided data
+    and returns this percentage rounded to two decimal places.
+
+    Parameters:
+    -----------
+    infile : str or np.ndarray
+        A file path to a GeoTIFF (.tif) file or a NumPy array. If a GeoTIFF file is provided,
+        the function uses rasterio to read the data. If a NumPy array is provided directly,
+        the function will use it for the calculations.
+
+    Returns:
+    --------
+    float
+        The percentage of zeros in the provided data, rounded to two decimal places.
+
+    Raises:
+    -------
+    ValueError
+        If the input is neither a valid path to a GeoTIFF file nor a NumPy array.
+    """
+    # Read data based on the input type (GeoTIFF or NumPy array)
+    if isinstance(infile, str):
+        # Check if the file is a valid .tif file
+        if infile.endswith(".tif"):
+            with rio.open(infile) as src:
+                # Read the data from the GeoTIFF (band data)
+                data = src.read(1)  # Read the first band (for multi-band raster, adjust if needed)
+        else:
+            raise ValueError("The file must be a .tif file.")
+    elif isinstance(infile, np.ndarray):
+        # If the input is a NumPy array
+        data = np.array(infile)
+    else:
+        raise ValueError("Input must be either a .tif file path or a NumPy array.")
+    # Ensure that data is a 2D array (or a 1D band data from GeoTIFF)
+    if data.ndim != 2:
+        raise ValueError("The data must be a 2D array (or 1D band data from a GeoTIFF).")
+    # Count the number of zeros in the data
+    num_zeros = np.count_nonzero(data == 0)
+    total_elements = data.size
+    zero_percentage = (num_zeros / total_elements) * 100
+    return round(zero_percentage, 2)
+
+def calculate_unique_percent(ds):
+    """Compute the percentage of uniques in a DataArray
+    args:
+    ds (DataArray): A DataArray or numpy array (2-d)
+
+    return: A dictionary
+    """
+    if isinstance(ds, np.ndarray):
+        data = ds.flatten()
+        data = data[~np.isnan(data)]
+    else:
+        data = ds.values.flatten()
+        data = data[~np.isnan(data)]
+    # Using count the count the unique values
+    count = Counter(data)
+    percent = {
+        str(key): round(val / sum(count.values()) * 100, 2)
+        for key, val in count.items()
+    }
+    return percent
+
+## Commong functions for handling datetimes
 def weekly_date_list(start_year, start_month, start_day, number_of_week=52):
     """generate a list of weekly dates.
 
@@ -152,23 +260,7 @@ def yearly_date_list(start_year, start_month, start_day, number_of_year=10):
     ]
     return year_list
 
-
-def band_to_time_dim(col, date_list):
-    """Rename time series dimension.
-
-    Args:
-        col (DataArray): A dataarray without datetime dimension.
-        date_list (list): A list of dates corresponds to its dataarray length.
-
-    Returns:
-        DataArray: A DataArray with time dimension.
-    """
-    col = col.rename({"band": "time"})
-    if len(col) == len(date_list):
-        col["time"] = date_list
-    return col
-
-
+## Common functions for handling GEE data
 class CollectionReducer:
     """Define some common computation methods for ImageCollection."""
 
@@ -241,7 +333,7 @@ def compute_pairmean(ds, first_band=None, second_band=None, outband_name="tmean"
     return fcol
 
 
-def scaling_data(ds, scale_factor=1):
+def scale_gee_data(ds, scale_factor=1):
     """Scaling ImageCollection or Image by a specified factor.
 
     Example: Scaling tmax and tmin variable in TerraClimate by a factor of 0.1
@@ -269,7 +361,7 @@ def scaling_data(ds, scale_factor=1):
         return scaled_data
 
 
-def geedate_converter(date_code):
+def geedate_code_to_python_datetime(date_code):
     """Convert GEE datetime code into Python readable datetime.
 
         Example:
@@ -434,40 +526,3 @@ def kelvin_celsius(col):
     return out_data
 
 
-def arange(start, stop, step=1):
-    result = []
-    current = start
-    while current < stop:
-        result.append(current)
-        current += step
-    return result
-
-
-def get_utm_zone(longitude, latitude):
-    """
-    Determines the UTM zone number and hemisphere (N/S) for a given latitude and longitude.
-
-    Parameters:
-    -----------
-    longitude : float
-        Longitude coordinate in decimal degrees.
-    latitude : float
-        Latitude coordinate in decimal degrees.
-
-    Returns:
-    --------
-    str
-        UTM zone with hemisphere (e.g., "34N", "35N").
-
-    Example:
-    --------
-    >>> get_utm_zone(31.2357, 30.0444)  # Cairo, Egypt
-    '36N'
-    """
-    # Calculate UTM zone number
-    utm_zone = int((longitude + 180) / 6) + 1
-
-    # Determine hemisphere
-    hemisphere = "N" if latitude >= 0 else "S"
-
-    return f"{utm_zone}{hemisphere}"
